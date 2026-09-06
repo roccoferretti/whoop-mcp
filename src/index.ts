@@ -37,7 +37,9 @@ if (existingTokens) {
 
 const sync = new WhoopSync(client, db);
 
-const SESSION_TTL_MS = 30 * 60 * 1000;
+// 24 ore. Il valore precedente (30 minuti) scadeva sempre fra un check-in
+// del mattino e uno della sera, rompendo il connettore a ogni pausa lunga.
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const transports = new Map<string, { transport: StreamableHTTPServerTransport; lastAccess: number }>();
 
 function cleanupStaleSessions(): void {
@@ -382,11 +384,17 @@ async function main(): Promise<void> {
 			if (req.method === 'POST') {
 				let transport: StreamableHTTPServerTransport;
 
+				const messages = Array.isArray(req.body) ? req.body : [req.body];
+				const isInitialize = messages.some(
+					(message: unknown) =>
+						typeof message === 'object' && message !== null && (message as { method?: string }).method === 'initialize',
+				);
+
 				if (sessionId && transports.has(sessionId)) {
 					const session = transports.get(sessionId)!;
 					session.lastAccess = Date.now();
 					transport = session.transport;
-				} else {
+				} else if (isInitialize) {
 					transport = new StreamableHTTPServerTransport({
 						sessionIdGenerator: () => crypto.randomUUID(),
 						onsessioninitialized: newSessionId => {
@@ -396,6 +404,24 @@ async function main(): Promise<void> {
 
 					const server = createMcpServer();
 					await server.connect(transport);
+				} else {
+					// Sessione scaduta o sconosciuta, e la richiesta non e' un initialize.
+					// Prima si creava un transport vergine che rifiutava la richiesta con un
+					// corpo non valido: il client riceveva contenuto illeggibile invece di un
+					// errore. Ora rispondiamo con un errore JSON-RPC corretto, cosi' il client
+					// rifa' l'handshake da solo.
+					res.status(404).json({
+						jsonrpc: '2.0',
+						error: {
+							code: -32001,
+							message: 'Session not found or expired. Reinitialize the connection.',
+						},
+						id:
+							typeof messages[0] === 'object' && messages[0] !== null && 'id' in (messages[0] as object)
+								? (messages[0] as { id: unknown }).id
+								: null,
+					});
+					return;
 				}
 
 				await transport.handleRequest(req, res, req.body);
