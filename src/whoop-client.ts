@@ -83,7 +83,28 @@ export class WhoopClient {
 		return tokens;
 	}
 
+	// Il refresh token di Whoop e' monouso: il primo refresh che arriva vince e
+	// invalida il token, gli altri falliscono. Il sync lancia quattro catene di
+	// richieste in parallelo con Promise.all, quindi alla scadenza dell'access
+	// token partivano quattro refresh insieme e tre fallivano, facendo abortire
+	// tutta la sincronizzazione.
+	// Qui il refresh e' "single-flight": se ne e' gia' in corso uno, le altre
+	// chiamate aspettano quello invece di aprirne un altro.
+	private refreshPromise: Promise<void> | null = null;
+
 	private async refreshTokens(): Promise<void> {
+		if (this.refreshPromise) {
+			return this.refreshPromise;
+		}
+
+		this.refreshPromise = this.performTokenRefresh().finally(() => {
+			this.refreshPromise = null;
+		});
+
+		return this.refreshPromise;
+	}
+
+	private async performTokenRefresh(): Promise<void> {
 		if (!this.tokens?.refresh_token) {
 			throw new Error('No refresh token available');
 		}
