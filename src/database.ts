@@ -47,6 +47,20 @@ interface StrainTrendRow {
 	calories: number;
 }
 
+// Le tabelle hanno colonne NOT NULL, ma l'API di Whoop puo' restituire record
+// incompleti (attivita' in corso, non ancora valutate). Un solo record cosi'
+// faceva fallire l'intera transazione e quindi tutta la sincronizzazione.
+// Qui i record incompleti vengono scartati: rientreranno al sync successivo,
+// quando Whoop li avra' finalizzati.
+function withRequired<T extends object>(items: T[], keys: (keyof T)[], label: string): T[] {
+	const usable = items.filter(item => keys.every(key => item[key] !== null && item[key] !== undefined));
+	const skipped = items.length - usable.length;
+	if (skipped > 0) {
+		process.stdout.write(`sync: ${skipped} ${label} incompleti scartati (verranno ripresi al prossimo sync)\n`);
+	}
+	return usable;
+}
+
 export class WhoopDatabase {
 	private db: Database.Database;
 
@@ -228,7 +242,7 @@ export class WhoopDatabase {
 			}
 		});
 
-		insertMany(cycles);
+		insertMany(withRequired(cycles, ['id', 'user_id', 'start', 'score_state'], 'cicli'));
 	}
 
 	upsertRecoveries(recoveries: WhoopRecovery[]): void {
@@ -254,7 +268,7 @@ export class WhoopDatabase {
 			}
 		});
 
-		insertMany(recoveries);
+		insertMany(withRequired(recoveries, ['cycle_id', 'user_id', 'created_at', 'score_state'], 'recovery'));
 	}
 
 	upsertSleeps(sleeps: WhoopSleep[]): void {
@@ -292,7 +306,7 @@ export class WhoopDatabase {
 			}
 		});
 
-		insertMany(sleeps);
+		insertMany(withRequired(sleeps, ['id', 'user_id', 'start', 'end', 'score_state'], 'sonni'));
 	}
 
 	upsertWorkouts(workouts: WhoopWorkout[]): void {
@@ -310,7 +324,11 @@ export class WhoopDatabase {
 				stmt.run(
 					w.id,
 					w.user_id,
-					w.sport_id,
+					// Whoop API v2 puo' restituire sport_id null (ha spostato il tipo di
+					// attivita' su sport_name). La colonna e' NOT NULL, quindi l'intera
+					// sincronizzazione falliva. -1 e' il codice che Whoop usa per l'attivita'
+					// generica, quindi e' il ripiego corretto.
+					w.sport_id ?? -1,
 					w.start,
 					w.end,
 					w.score_state,
@@ -328,7 +346,7 @@ export class WhoopDatabase {
 			}
 		});
 
-		insertMany(workouts);
+		insertMany(withRequired(workouts, ['id', 'user_id', 'start', 'end', 'score_state'], 'workout'));
 	}
 
 	getLatestCycle(): DbCycle | null {
