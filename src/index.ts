@@ -109,6 +109,11 @@ function createMcpServer(): Server {
 				inputSchema: { type: 'object', properties: {}, required: [] },
 			},
 			{
+				name: 'get_body_measurement',
+				description: 'Get current body measurements from Whoop: weight, height and Whoop-estimated max heart rate.',
+				inputSchema: { type: 'object', properties: {}, required: [] },
+			},
+			{
 				name: 'get_recovery_trends',
 				description: 'Get recovery score trends over time, including HRV and resting heart rate patterns.',
 				inputSchema: {
@@ -169,6 +174,16 @@ function createMcpServer(): Server {
 				} catch {
 					// Continue with cached data
 				}
+			}
+
+			// get_body_measurement interroga l'API Whoop in diretta: servono i token,
+			// ma non la sincronizzazione del database locale.
+			if (name === 'get_body_measurement') {
+				const tokens = db.getTokens();
+				if (!tokens) {
+					return { content: [{ type: 'text', text: 'Not authenticated with Whoop. Use get_auth_url to authorize first.' }] };
+				}
+				client.setTokens(tokens);
 			}
 
 			switch (name) {
@@ -309,6 +324,25 @@ function createMcpServer(): Server {
 						content: [{
 							type: 'text',
 							text: `Sync complete!\n- Cycles: ${stats?.cycles}\n- Recoveries: ${stats?.recoveries}\n- Sleeps: ${stats?.sleeps}\n- Workouts: ${stats?.workouts}`,
+						}],
+					};
+				}
+
+				case 'get_body_measurement': {
+					const body = await client.getBodyMeasurement();
+					const heightCm = Math.round(body.height_meter * 100);
+					return {
+						content: [{
+							type: 'text',
+							text: [
+								'# Body Measurements',
+								'',
+								`- **Weight**: ${body.weight_kilogram.toFixed(1)} kg`,
+								`- **Height**: ${heightCm} cm`,
+								`- **Max HR (Whoop estimate)**: ${body.max_heart_rate} bpm`,
+								'',
+								'_Live from the Whoop API, not the local database. The max HR above is Whoop\'s own estimate and is not a lab-measured value._',
+							].join('\n'),
 						}],
 					};
 				}
